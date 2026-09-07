@@ -1,0 +1,32 @@
+[
+  {
+    "question": "What was Q3 enterprise revenue and operating margin?",
+    "ground_truth": "Q3 enterprise revenue was $48.2 million and operating margin was 18.4%.",
+    "source_id": "q3-financials"
+  },
+  {
+    "question": "How much cash did the company hold at quarter end?",
+    "ground_truth": "Cash and equivalents totaled $126 million at quarter end.",
+    "source_id": "q3-financials"
+  },
+  {
+    "question": "How often must API keys be rotated?",
+    "ground_truth": "API keys must be rotated every 90 days.",
+    "source_id": "security-policy"
+  },
+  {
+    "question": "What encryption is required for data at rest and in transit?",
+    "ground_truth": "Data at rest is encrypted with AES-256 and data in transit uses TLS 1.3.",
+    "source_id": "security-policy"
+  },
+  {
+    "question": "What monthly uptime does the SLA guarantee?",
+    "ground_truth": "The platform commits to 99.9% monthly uptime excluding announced maintenance.",
+    "source_id": "sla-guarantee"
+  },
+  {
+    "question": "What service credit applies if monthly uptime falls below 99.9%?",
+    "ground_truth": "Customers receive a 10% service credit if monthly uptime falls below 99.9%.",
+    "source_id": "sla-guarantee"
+  }
+]
