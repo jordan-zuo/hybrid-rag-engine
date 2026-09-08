@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-import re
 import time
 from typing import Any
 
@@ -9,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.cache import SemanticCache
 from app.config import settings
-from app.retrieval import HybridRetriever, tokenize
+from app.retrieval import HybridRetriever
 
 
 class GroundedAnswer(BaseModel):
@@ -85,8 +83,9 @@ class RAGEngine:
             "collection": settings.COLLECTION_NAME,
             "dense_model": settings.DENSE_MODEL_NAME,
             "reranker_model": settings.RERANKER_MODEL_NAME,
-            "llm_model": settings.LLM_MODEL if self._llm is not None else None,
-            "synthesis": "groq" if self._llm is not None else "local",
+            "llm_model": settings.LLM_MODEL,
+            "llm_base_url": settings.gen_base_url,
+            "synthesis": settings.gen_provider,
             "docker": False,
         }
 
@@ -98,7 +97,10 @@ class RAGEngine:
                 sources_used=[],
             )
         if self._llm is None:
-            return _local_synthesis(query, sources)
+            raise RuntimeError(
+                "No LLM API key is configured (LLM_API_KEY / GROQ_API_KEY): "
+                "LLM synthesis requires a key. Refusing silent extractive fallback."
+            )
 
         context = "\n\n".join(f"[{item['id']}]\n{item['text']}" for item in sources)
         system_prompt = (
@@ -113,66 +115,37 @@ class RAGEngine:
             "Put source ids in sources_used.\n\n"
             f"Context:\n{context}\n\nQuestion: {query}"
         )
-        try:
-            return self._llm.chat.completions.create(
-                model=settings.LLM_MODEL,
-                response_model=GroundedAnswer,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-            )
-        except Exception:
-            return _local_synthesis(query, sources)
-
-
-_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
-
-
-def _local_synthesis(query: str, sources: list[dict[str, Any]]) -> GroundedAnswer:
-    query_tokens = set(tokenize(query))
-    picked: list[str] = []
-    seen: set[str] = set()
-    for item in sources:
-        sentences = [part.strip() for part in _SENTENCE_RE.split(item["text"]) if part.strip()]
-        ranked = sorted(
-            sentences,
-            key=lambda sentence: len(query_tokens & set(tokenize(sentence))),
-            reverse=True,
+        # Intentionally no try/except: LLM failures must raise visibly,
+        # never silently fall back to copying raw context text.
+        # max_tokens is capped: free tiers enforce small output-token
+        # budgets per minute and instructor defaults higher, which 429s.
+        return self._llm.chat.completions.create(
+            model=settings.LLM_MODEL,
+            response_model=GroundedAnswer,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=300,
         )
-        for sentence in ranked[:2]:
-            key = sentence.lower()
-            overlap = len(query_tokens & set(tokenize(sentence)))
-            if key in seen or (query_tokens and overlap == 0):
-                continue
-            seen.add(key)
-            picked.append(sentence)
-            if len(picked) >= 4:
-                break
-        if len(picked) >= 4:
-            break
-    if not picked:
-        picked = [item["text"].strip() for item in sources[:2] if item["text"].strip()]
-    answer = " ".join(picked).strip() or (
-        "Retrieved documents did not contain enough overlapping text to synthesize an answer."
-    )
-    top_score = float(sources[0].get("score") or 0.0)
-    confidence = 1.0 / (1.0 + math.exp(-top_score))
-    return GroundedAnswer(
-        answer=answer,
-        confidence_score=round(confidence, 4),
-        sources_used=[item["id"] for item in sources],
-    )
 
 
 def _build_groq_client() -> Any:
-    if not settings.GROQ_API_KEY:
-        return None
+    if not settings.gen_api_key:
+        raise RuntimeError(
+            "No LLM API key is configured (LLM_API_KEY / GROQ_API_KEY): "
+            "LLM synthesis requires a key. Refusing silent extractive fallback."
+        )
     try:
         import instructor
         from openai import OpenAI
-    except ImportError:
-        return None
+    except ImportError as exc:
+        raise RuntimeError(
+            "LLM dependencies missing (instructor/openai required for synthesis)."
+        ) from exc
     return instructor.from_openai(
-        OpenAI(api_key=settings.GROQ_API_KEY, base_url=settings.GROQ_BASE_URL)
+        OpenAI(api_key=settings.gen_api_key, base_url=settings.gen_base_url),
+        # mistral-Nemo-Instruct-2407 supports json_mode but NOT tool calling;
+        # default instructor TOOL mode 400s ("does not support tools").
+        mode=instructor.Mode.JSON,
     )

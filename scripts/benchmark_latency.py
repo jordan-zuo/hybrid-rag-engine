@@ -79,8 +79,8 @@ def _print_report(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Async latency benchmark for /query")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--concurrency", type=int, default=8)
-    parser.add_argument("--requests", type=int, default=40)
+    parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument("--requests", type=int, default=6)
     args = parser.parse_args()
     asyncio.run(run_benchmark(args.base_url, args.concurrency, args.requests))
 
