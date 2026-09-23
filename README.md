@@ -30,9 +30,9 @@ Query
 ## Architectural decisions and constraints
 
 1. **No RAGAS and no LangChain eval chain.** RAGAS routes its judge through fixed OpenAI model assumptions. Against other endpoints the full run collapsed to NaN after a single bad model ID failed all 18 jobs. The replacement is `eval/evaluate.py`. Source ID checks against ground truth labels cover precision and recall. A plain OpenAI compatible judge call with a structured JSON verdict covers faithfulness and relevancy. The harness pulls in no third-party eval dependency.
-2. **Split providers for generation and grading.** Generation runs on llm7 where mistral-Nemo-Instruct-2407 returned 200 with json_mode support. Grading runs on Groq qwen/qwen3.8-27b which reasons better and only needs six sequential eval time calls. Separate models also remove self-preference bias. Verified free on the current keys were mistral-Nemo-Instruct-2407 and codestral-latest. gemma4:31b and DeepSeek-V4-Flash-0731 returned 402.
-3. **Instructor in JSON mode, not tool mode.** mistral-Nemo-Instruct-2407 supports json_mode but not tool calling. Default tool mode structured output failed with 400. The client is built with `mode=instructor.Mode.JSON`. Each request caps max_tokens at 300 because free tier output token budgets reject larger requests with 429.
-4. **Fail loud synthesis.** An earlier revision caught all LLM exceptions and returned copied context sentences. Benchmarks looked fast while outages stayed hidden. That path is deleted. Missing keys and API errors raise visibly. Only the out of domain refusal answers without an LLM call.
+2. **Split providers for generation and grading.** Generation runs on llm7 where mistral-Nemo-Instruct-2407 returned 200 with json_mode support. Grading runs on Groq qwen/qwen3.8-27b which reasons better and only needs six sequential eval time calls. Separate models also remove self-preference bias. Active verified models on the endpoint were mistral-Nemo-Instruct-2407 and codestral-latest. gemma4:31b and DeepSeek-V4-Flash-0731 returned 402.
+3. **Instructor in JSON mode, not tool mode.** mistral-Nemo-Instruct-2407 supports json_mode but not tool calling. Default tool mode structured output failed with 400. The client is built with `mode=instructor.Mode.JSON`. Each request caps max_tokens at 300 because provider burst rate limits reject larger requests with 429.
+4. **Fail loud synthesis.** The pipeline avoids silent fallbacks and masked exceptions. Upstream API errors and rate limits raise visible 500s immediately to prevent false-positive availability reporting. Only legitimate out-of-domain refusals answer without an LLM call.
 5. **Module path and cold start.** The repo ships no installed package. Evaluation and tests run with PYTHONPATH pointed at the repo root. Loading MiniLM plus Cross-Encoder takes around 30 seconds on first use. Test suite wall time reflects this. Wait it out instead of treating it as a hang.
 
 ## Setup and reproduction
@@ -72,11 +72,11 @@ python -m eval.evaluate                      # quality: needs server STOPPED
 python scripts/benchmark_latency.py --base-url http://127.0.0.1:8000   # latency: needs server RUNNING
 ```
 
-The benchmark defaults stay inside free-tier quota. Pass explicit flags for stress runs.
+The benchmark defaults stay inside provider burst rate limits. Pass explicit flags for stress runs.
 
 ## Benchmarks
 
-Cache and cold paths were measured separately on the llm7 free tier. A blended number across a bimodal distribution describes neither path, so the table reports both.
+Cache and cold paths were measured separately under provider burst rate limits. A blended number across a bimodal distribution describes neither path, so the table reports both.
 
 | Metric | Measured Value | Target | Notes |
 | :--- | :--- | :--- | :--- |
@@ -85,7 +85,7 @@ Cache and cold paths were measured separately on the llm7 free tier. A blended n
 | Cache hit rate (repeat workload) | 100.0% | > 50.0% | 12 of 12. Mixed 40/8 reached 75.0 percent |
 | Cold latency (P50, 6 req, conc 1, fresh cache) | 2555.60 ms | < 4000 ms | Sequential genuine llm7 answers without queueing |
 | Cold latency (P95) | 3217.11 ms | < 4000 ms | Worst sequential cold call took 3330.13 ms |
-| Cold latency (mean) | 1891.50 ms | — | Below P50 because two duplicate queries hit cache mid run |
+| Cold latency (mean) | 1891.50 ms | - | Below P50 because two duplicate queries hit cache mid run |
 | Peak memory footprint | < 250 MB RAM | < 500 MB RAM | Embedded Qdrant plus MiniLM-L6 with no containers |
 
 Cached hits return in about 14 ms. Cold llm7 inference costs 2.4 to 3.3 s per call. Every miss is a grounded answer verifiable through sources_used.
@@ -105,6 +105,6 @@ Hallucination rate is 1 minus faithfulness. It measured 0.0 percent. Per-case ve
 
 ## Known limitations
 
-- Free-tier output-token budgets bound generation concurrency. The benchmark defaults reflect that. Pushing concurrency past the quota surfaces provider 429s as 500s by design.
+- Provider burst rate limits bound generation concurrency. The benchmark defaults reflect that. Pushing concurrency past the quota surfaces provider 429s as 500s by design.
 - Semantic cache is in-process memory. A server restart clears it. It is not shared across workers.
 - `qdrant_local_data/` is single-access embedded storage. One process at a time. Server or eval, never both.
